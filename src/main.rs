@@ -14,6 +14,7 @@ type GroupId = u32;
 
 const COOLDOWN_TIME: Duration = Duration::from_secs(60);
 const ROBUX_FILE: &str = "robux.txt";
+const RECONNECT_THRESHOLD: i32 = 5;
 
 fn is_rate_limited(group_info: &json::Value) -> bool {
     let mes = group_info.pointer("/errors/0/message");
@@ -90,76 +91,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let groups_checked_clone = groups_checked.clone();
         let proxies_connected_clone = proxies_connected.clone();
         handles.push(tokio::spawn(async move {
-            let mut connect_error = false;
-            for connection_attempt in 0..5 {
-                proxies_connected_clone.fetch_add(1, Ordering::Relaxed);
-                let err = async {
-                    let client = reqwest::ClientBuilder::new()
-                        .proxy(reqwest::Proxy::all(&proxy_url)?)
-                        .build()?;
-                    // Infinite loop of group scraping
-                    loop {
-                        let random_group_id = generate_random_group_id();
-                        let res = client
-                            .get(&funds_check_address(random_group_id))
-                            .send()
-                            .await?;
-                        let funds_value: json::Value = match json::from_str(&res.text().await?) {
-                            Ok(f) => f,
-                            Err(_) => continue,
-                        };
-                        if is_rate_limited(&funds_value) {
-                            rate_limited(i).await;
-                            continue;
-                        }
-                        let funds: FundsResponse = match json::from_value(funds_value) {
-                            Ok(f) => f,
-                            Err(_) => continue,
-                        };
-                        if funds.robux > 0 {
+            let mut groups_checked = 0;
+            loop {
+                let mut connect_error = false;
+                for connection_attempt in 0..5 {
+                    proxies_connected_clone.fetch_add(1, Ordering::Relaxed);
+                    let err = async {
+                        let client = reqwest::ClientBuilder::new()
+                            .proxy(reqwest::Proxy::all(&proxy_url)?)
+                            .build()?;
+                        // Infinite loop of group scraping
+                        loop {
+                            let random_group_id = generate_random_group_id();
                             let res = client
-                                .get(&owner_check_address(random_group_id))
+                                .get(&funds_check_address(random_group_id))
                                 .send()
                                 .await?;
-                            let owner: json::Value = match json::from_str(&res.text().await?) {
-                                Ok(o) => o,
+                            let funds_value: json::Value = match json::from_str(&res.text().await?) {
+                                Ok(f) => f,
                                 Err(_) => continue,
                             };
-                            if is_rate_limited(&owner) {
+                            if is_rate_limited(&funds_value) {
                                 rate_limited(i).await;
                                 continue;
                             }
-                            let not_locked = owner.get("isLocked").is_none();
-                            let public = owner["publicEntryAllowed"] == json::Value::Bool(true);
-                            let no_owner = owner["owner"].is_null();
-                            if not_locked && public && no_owner {
-                                let s = format!("Group {} has {} robux.", random_group_id, funds.robux);
-                                println!("{}", s);
-                                if let Err(e) = write_to_robux_file(s).await {
-                                    println!("Error writing file: {}", e);
+                            let funds: FundsResponse = match json::from_value(funds_value) {
+                                Ok(f) => f,
+                                Err(_) => continue,
+                            };
+                            if funds.robux > 0 {
+                                let res = client
+                                    .get(&owner_check_address(random_group_id))
+                                    .send()
+                                    .await?;
+                                let owner: json::Value = match json::from_str(&res.text().await?) {
+                                    Ok(o) => o,
+                                    Err(_) => continue,
+                                };
+                                if is_rate_limited(&owner) {
+                                    rate_limited(i).await;
+                                    continue;
+                                }
+                                let not_locked = owner.get("isLocked").is_none();
+                                let public = owner["publicEntryAllowed"] == json::Value::Bool(true);
+                                let no_owner = owner["owner"].is_null();
+                                if not_locked && public && no_owner {
+                                    let s = format!("Group {} has {} robux.", random_group_id, funds.robux);
+                                    println!("{}", s);
+                                    if let Err(e) = write_to_robux_file(s).await {
+                                        println!("Error writing file: {}", e);
+                                    }
                                 }
                             }
+                            groups_checked_clone.fetch_add(1, Ordering::Relaxed);
+                            groups_checked += 1;
                         }
-                        groups_checked_clone.fetch_add(1, Ordering::Relaxed);
+                        // Type hint
+                        #[allow(unreachable_code)]
+                        Ok::<(), Box<dyn std::error::Error>>(())
                     }
-                    // Type hint
-                    #[allow(unreachable_code)]
-                    Ok::<(), Box<dyn std::error::Error>>(())
+                    .await
+                    .unwrap_err();
+                    proxies_connected_clone.fetch_sub(1, Ordering::Relaxed);
+                    let hyper_error = err.source().and_then(|s| s.downcast_ref::<hyper::Error>());
+                    connect_error = hyper_error.map_or(false, |e| e.is_connect());
+                    if !connect_error {
+                        println!(
+                            "Proxy {} error in connection attempt {}: {:?}",
+                            i, connection_attempt, err
+                        );
+                    }
                 }
-                .await
-                .unwrap_err();
-                proxies_connected_clone.fetch_sub(1, Ordering::Relaxed);
-                let hyper_error = err.source().and_then(|s| s.downcast_ref::<hyper::Error>());
-                connect_error = hyper_error.map_or(false, |e| e.is_connect());
                 if !connect_error {
-                    println!(
-                        "Proxy {} error in connection attempt {}: {:?}",
-                        i, connection_attempt, err
-                    );
+                    println!("Proxy {} disconnected", i);
                 }
-            }
-            if !connect_error {
-                println!("Proxy {} disconnected", i);
+                if groups_checked < RECONNECT_THRESHOLD {
+                    break
+                } else {
+                    println!("Proxy {} disconnected, but it has scanned {} groups. Attempting to reconnect", i, groups_checked);
+                }
             }
         }));
     }
