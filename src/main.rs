@@ -1,7 +1,7 @@
 use rand::random;
 use serde::Deserialize;
 use serde_json as json;
-use std::time::Duration;
+use std::{sync::{Arc, atomic::{Ordering, AtomicU32}}, time::Duration};
 use tokio::time::delay_for;
 use tokio::prelude::*;
 
@@ -71,7 +71,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxies = get_proxies_list().await?;
     let mut handles = Vec::new();
 
+    let groups_checked = Arc::new(AtomicU32::new(0));
+
+    let groups_checked_clone = groups_checked.clone();
+    tokio::spawn(async move {
+        loop {
+            println!("{} groups checked", groups_checked_clone.load(Ordering::Relaxed));
+            delay_for(Duration::from_secs(30)).await;
+        }
+    });
+
     for (i, proxy_url) in proxies.into_iter().enumerate() {
+        let groups_checked_clone = groups_checked.clone();
         handles.push(tokio::spawn(async move {
             let mut connect_error = false;
             for connection_attempt in 0..5 {
@@ -122,6 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                        groups_checked_clone.fetch_add(1, Ordering::Relaxed);
                     }
                     // Type hint
                     #[allow(unreachable_code)]
