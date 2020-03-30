@@ -69,23 +69,30 @@ async fn write_to_robux_file(s: String) -> std::io::Result<()> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxies = get_proxies_list().await?;
+    let proxies_len = proxies.len();
     let mut handles = Vec::new();
 
     let groups_checked = Arc::new(AtomicU32::new(0));
+    let proxies_connected: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
     let groups_checked_clone = groups_checked.clone();
+    let proxies_connected_clone = proxies_connected.clone();
     tokio::spawn(async move {
         loop {
             println!("{} groups checked", groups_checked_clone.load(Ordering::Relaxed));
+            let proxies_connected = proxies_connected_clone.load(Ordering::Relaxed);
+            println!("{}/{} proxies connected {}%", proxies_connected, proxies_len, proxies_connected as usize * 100 / proxies_len);
             delay_for(Duration::from_secs(30)).await;
         }
     });
 
     for (i, proxy_url) in proxies.into_iter().enumerate() {
         let groups_checked_clone = groups_checked.clone();
+        let proxies_connected_clone = proxies_connected.clone();
         handles.push(tokio::spawn(async move {
             let mut connect_error = false;
             for connection_attempt in 0..5 {
+                proxies_connected_clone.fetch_add(1, Ordering::Relaxed);
                 let err = async {
                     let client = reqwest::ClientBuilder::new()
                         .proxy(reqwest::Proxy::all(&proxy_url)?)
@@ -141,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 .await
                 .unwrap_err();
+                proxies_connected_clone.fetch_sub(1, Ordering::Relaxed);
                 let hyper_error = err.source().and_then(|s| s.downcast_ref::<hyper::Error>());
                 connect_error = hyper_error.map_or(false, |e| e.is_connect());
                 if !connect_error {
