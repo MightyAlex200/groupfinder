@@ -1,9 +1,14 @@
+#[macro_use]
+extern crate lazy_static;
+
 use rand::random;
 use serde::Deserialize;
 use serde_json as json;
-use std::{sync::{Arc, atomic::{Ordering, AtomicU32}}, time::Duration};
+use std::{sync::{Arc, atomic::{Ordering, AtomicU32}}, time::Duration, collections::BTreeMap};
 use tokio::time::delay_for;
 use tokio::prelude::*;
+use tokio::sync::Semaphore;
+use regex::Regex;
 
 #[derive(Deserialize)]
 struct FundsResponse {
@@ -15,6 +20,15 @@ type GroupId = u32;
 const COOLDOWN_TIME: Duration = Duration::from_secs(60);
 const ROBUX_FILE: &str = "robux.txt";
 const RECONNECT_THRESHOLD: i32 = 5;
+
+lazy_static! {
+    static ref ROBUX_SEMAPHORE: Semaphore = Semaphore::new(1);
+    static ref ROBUX_REGEX: Regex = Regex::new(r"^Group (\d+) has (\d+) robux.$").unwrap();
+}
+
+fn robux_format_str(gid: u32, robux: u32) -> String {
+    format!("Group {} has {} robux.", gid, robux)
+}
 
 fn is_rate_limited(group_info: &json::Value) -> bool {
     let mes = group_info.pointer("/errors/0/message");
@@ -55,15 +69,29 @@ async fn rate_limited(proxy_index: usize) {
     delay_for(COOLDOWN_TIME).await;
 }
 
-async fn write_to_robux_file(s: String) -> std::io::Result<()> {
-    let mut file: tokio::fs::File = tokio::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .truncate(false)
-        .open(ROBUX_FILE)
-        .await?;
-    file.write_all(s.as_bytes()).await?;
-    file.write_all("\n".as_bytes()).await?;
+async fn write_to_robux_file(gid: u32, robux: u32) -> std::io::Result<()> {
+    let _lock = ROBUX_SEMAPHORE.acquire().await;
+    let file = tokio::fs::read_to_string(ROBUX_FILE).await;
+    let mut vec: Vec<(u32, u32)>;
+    match file {
+        Ok(file) => {
+            let mut map = file
+                .lines()
+                .filter_map(|s| ROBUX_REGEX.captures(s))
+                .filter_map(|c| c.get(1).and_then(|g| c.get(2).map(|r| (g.as_str().parse().unwrap(), r.as_str().parse().unwrap()))))
+                .collect::<BTreeMap<u32, u32>>();
+            map.insert(gid, robux);
+            vec = map.into_iter().collect::<Vec<_>>();
+            vec.sort_by_key(|&(_, r)| r);
+            vec.reverse();
+        }
+        Err(_) => {
+            vec = vec![(gid, robux)];
+        }
+    }
+    
+    let s = vec.into_iter().map(|(g, r)| robux_format_str(g, r)).collect::<Vec<_>>().join("\n");
+    tokio::fs::File::create(ROBUX_FILE).await?.write_all(s.as_bytes()).await?;
     Ok(())
 }
 
@@ -136,9 +164,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let public = owner["publicEntryAllowed"] == json::Value::Bool(true);
                                 let no_owner = owner["owner"].is_null();
                                 if not_locked && public && no_owner {
-                                    let s = format!("Group {} has {} robux.", random_group_id, funds.robux);
-                                    println!("{}", s);
-                                    if let Err(e) = write_to_robux_file(s).await {
+                                    println!("{}", robux_format_str(random_group_id, funds.robux));
+                                    if let Err(e) = write_to_robux_file(random_group_id, funds.robux).await {
                                         println!("Error writing file: {}", e);
                                     }
                                 }
