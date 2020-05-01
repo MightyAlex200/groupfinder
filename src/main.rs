@@ -19,11 +19,13 @@ type GroupId = u32;
 
 const COOLDOWN_TIME: Duration = Duration::from_secs(60);
 const ROBUX_FILE: &str = "robux.txt";
+const API_KEY_FILE: &str = "api.key";
 const RECONNECT_THRESHOLD: i32 = 5;
 
 lazy_static! {
     static ref ROBUX_SEMAPHORE: Semaphore = Semaphore::new(1);
     static ref ROBUX_REGEX: Regex = Regex::new(r"^Group (\d+) has (\d+) robux.$").unwrap();
+    static ref API_KEY: String = std::fs::read_to_string(API_KEY_FILE).unwrap();
 }
 
 fn robux_format_str(gid: u32, robux: u32) -> String {
@@ -41,13 +43,14 @@ fn is_rate_limited(group_info: &json::Value) -> bool {
 
 fn funds_check_address(id: GroupId) -> String {
     format!(
-        "https://economy.roblox.com/v1/groups/{}/currency?_=1585453879360",
-        id
+        "https://economy.roblox.com/v1/groups/{}/currency?_={}",
+        id,
+        &*API_KEY
     )
 }
 
 fn owner_check_address(id: GroupId) -> String {
-    format!("https://groups.roblox.com/v1/groups/{}?_=1585453879360", id)
+    format!("https://groups.roblox.com/v1/groups/{}?_={}", id, &*API_KEY)
 }
 
 fn generate_random_group_id() -> GroupId {
@@ -100,6 +103,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxies = get_proxies_list().await?;
     let proxies_len = proxies.len();
     let mut handles = Vec::new();
+
+    lazy_static::initialize(&API_KEY);
 
     let groups_checked = Arc::new(AtomicU32::new(0));
     let proxies_connected: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
