@@ -134,7 +134,7 @@ async fn generate_proxies_list() -> Result<Vec<String>, ()> {
 
 struct GroupScraper {
     proxies_list: Option<Result<Vec<String>, std::io::ErrorKind>>,
-    groups: BTreeMap<u32, u32>,
+    groups: BTreeMap<(Option<String>, GroupId), u32>,
     running: bool,
     proxies_connected: u32,
     // States
@@ -148,7 +148,10 @@ struct GroupScraper {
 enum Msg {
     ProxyListLoaded(Result<Vec<String>, std::io::ErrorKind>),
     GenerateProxies,
-    GroupFound { gid: u32, robux: u32 },
+    GroupFound {
+        group: (Option<String>, u32),
+        robux: u32,
+    },
     SetRunning,
     ProxyConnected,
     ProxyDisconnected,
@@ -224,12 +227,14 @@ where
                                         owner["publicEntryAllowed"] == json::Value::Bool(true);
                                     let no_owner = owner["owner"].is_null();
                                     if not_locked && public && no_owner {
+                                        let group_name =
+                                            owner["name"].as_str().map(|s| s.to_string());
                                         println!(
                                             "{}",
                                             robux_format_str(random_group_id, funds.robux)
                                         );
                                         txc.send(Msg::GroupFound {
-                                            gid: random_group_id,
+                                            group: (group_name, random_group_id),
                                             robux: funds.robux,
                                         })
                                         .ok();
@@ -307,8 +312,11 @@ impl Application for GroupScraper {
             Msg::GenerateProxies => Command::perform(generate_proxies_list(), |proxies| {
                 Msg::ProxyListLoaded(proxies.map_err(|_| std::io::ErrorKind::Other))
             }),
-            Msg::GroupFound { gid, robux } => {
-                self.groups.insert(gid, robux);
+            Msg::GroupFound {
+                group: (name, gid),
+                robux,
+            } => {
+                self.groups.insert((name, gid), robux);
                 Command::none()
             }
             Msg::SetRunning => {
@@ -360,13 +368,21 @@ impl Application for GroupScraper {
 
         let robux_found: u32 = self.groups.iter().map(|(_, r)| r).sum();
         let robux_count = widget::Text::new(format!("Total robux found: {}", robux_found));
-        let groups_list = self
-            .groups
-            .iter()
+        let mut groups_list = self.groups.iter().collect::<Vec<_>>();
+        groups_list.sort_by_key(|(_, &r)| r);
+        groups_list.reverse();
+        let groups_list = groups_list
+            .into_iter()
             .fold(
                 widget::Scrollable::new(&mut self.groups_list_state),
-                |list, (gid, r)| {
-                    list.push(widget::Text::new(format!("Group {}: {} robux", gid, r)))
+                |list, ((name, _), r)| {
+                    list.push(widget::Text::new(format!(
+                        "Group \"{}\": {} robux",
+                        name.as_ref()
+                            .map(|s| &s[..])
+                            .unwrap_or("(unknown group name)"),
+                        r
+                    )))
                 },
             )
             .height(iced::Length::Fill);
