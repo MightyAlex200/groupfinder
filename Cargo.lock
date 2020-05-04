@@ -873,6 +873,7 @@ dependencies = [
 name = "groupfinder"
 version = "0.1.0"
 dependencies = [
+ "futures 0.3.4",
  "futures-core",
  "hyper",
  "iced",

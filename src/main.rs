@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate lazy_static;
 
-use iced::{widget, Application, Command, Element, Subscription};
+use iced::{widget, Application, Command, Element, Length, Subscription};
 use iced_futures::BoxStream;
 use rand::random;
 use regex::Regex;
@@ -10,7 +10,7 @@ use serde_json as json;
 use std::{
     collections::BTreeMap,
     hash::{Hash, Hasher},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::prelude::*;
 use tokio::sync::Semaphore;
@@ -28,6 +28,14 @@ const ROBUX_FILE: &str = "robux.txt";
 const API_KEY_FILE: &str = "api.key";
 const RECONNECT_THRESHOLD: i32 = 5;
 const PROXIES_LOC: &str = "proxies.json";
+const PREMIUM_ROBUX_PER_MONTH: u16 = 2200;
+const PREMIUM_ROBUX_PER_SECOND: f64 = {
+    let seconds_in_minute = 60;
+    let seconds_in_hour = seconds_in_minute * 60;
+    let seconds_in_day = seconds_in_hour * 24;
+    let seconds_in_month = seconds_in_day * 30;
+    PREMIUM_ROBUX_PER_MONTH as f64 / seconds_in_month as f64
+};
 
 lazy_static! {
     static ref ROBUX_SEMAPHORE: Semaphore = Semaphore::new(1);
@@ -137,6 +145,8 @@ struct GroupScraper {
     groups: BTreeMap<(Option<String>, GroupId), u32>,
     running: bool,
     proxies_connected: u32,
+    start_time: Instant,
+    premium_groups: bool,
     // States
     proxies_scroll_state: widget::scrollable::State,
     new_proxies_button_state: widget::button::State,
@@ -155,6 +165,7 @@ enum Msg {
     SetRunning,
     ProxyConnected,
     ProxyDisconnected,
+    SetPremiumGroups(bool),
 }
 
 struct Scraping(Vec<String>);
@@ -292,6 +303,8 @@ impl Application for GroupScraper {
             groups: BTreeMap::new(),
             running: false,
             proxies_connected: 0,
+            start_time: Instant::now(),
+            premium_groups: false,
             proxies_scroll_state: Default::default(),
             new_proxies_button_state: Default::default(),
             groups_list_state: Default::default(),
@@ -331,6 +344,10 @@ impl Application for GroupScraper {
                 self.proxies_connected -= 1;
                 Command::none()
             }
+            Msg::SetPremiumGroups(b) => {
+                self.premium_groups = b;
+                Command::none()
+            }
         }
     }
     fn view(&mut self) -> Element<'_, Self::Message> {
@@ -367,7 +384,14 @@ impl Application for GroupScraper {
             .align_items(iced::Align::Center);
 
         let robux_found: u32 = self.groups.iter().map(|(_, r)| r).sum();
-        let robux_count = widget::Text::new(format!("Total robux found: {}", robux_found));
+        let time_elapsed = self.start_time.elapsed().as_secs_f32();
+        let robux_per_second = robux_found as f32 / time_elapsed as f32;
+        let robux_count = widget::Text::new(format!(
+            "Total robux found: {}\n{}% better than premium",
+            robux_found,
+            ((robux_per_second / PREMIUM_ROBUX_PER_SECOND as f32) - 1. * 100.) as i16
+        ))
+        .horizontal_alignment(iced::HorizontalAlignment::Center);
         let mut groups_list = self.groups.iter().collect::<Vec<_>>();
         groups_list.sort_by_key(|(_, &r)| r);
         groups_list.reverse();
@@ -391,10 +415,19 @@ impl Application for GroupScraper {
             widget::Text::new(if self.running { "Running..." } else { "Start" }),
         )
         .on_press(Msg::SetRunning);
+        let premium_checkbox =
+            widget::Checkbox::new(self.premium_groups, "Detect premium groups", |checked| {
+                Msg::SetPremiumGroups(checked)
+            });
+        let start_row = widget::Row::new()
+            .push(start_button)
+            .push(widget::Space::new(Length::Units(16), Length::Units(0)))
+            .push(premium_checkbox)
+            .align_items(iced::Align::Center);
         let robux_column = widget::Column::new()
             .push(robux_count)
             .push(groups_list)
-            .push(start_button)
+            .push(start_row)
             .width(iced::Length::Fill)
             .align_items(iced::Align::Center);
         widget::Row::new()
