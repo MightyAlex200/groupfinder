@@ -1,5 +1,5 @@
 use crate::GroupId;
-use iced::{widget, Application, Command, Element, Subscription};
+use iced::{widget, Application, Command, Element, Length, Subscription};
 use serde_json as json;
 use std::{collections::BTreeMap, time::Instant};
 
@@ -43,19 +43,23 @@ pub enum Msg {
         group: (Option<String>, GroupId),
         robux: u32,
     },
-    SetRunning,
+    ToggleRunning,
     ProxyConnected,
     ProxyDisconnected,
-    // SetPremiumGroups(bool),
+    SetPremiumGroups(bool),
 }
 
 pub struct GroupScraper {
     proxies_list: Option<Result<Vec<String>, std::io::ErrorKind>>,
     groups: BTreeMap<(Option<String>, GroupId), u32>,
     running: bool,
+    running_sender: tokio::sync::watch::Sender<bool>,
+    running_receiver: tokio::sync::watch::Receiver<bool>,
     proxies_connected: u32,
     start_time: Instant,
-    // premium_groups: bool,
+    premium_groups: bool,
+    premium_groups_sender: tokio::sync::watch::Sender<bool>,
+    premium_groups_receiver: tokio::sync::watch::Receiver<bool>,
     // States
     proxies_scroll_state: widget::scrollable::State,
     new_proxies_button_state: widget::button::State,
@@ -68,13 +72,19 @@ impl Application for GroupScraper {
     type Message = Msg;
     type Flags = ();
     fn new((): Self::Flags) -> (Self, Command<Self::Message>) {
+        let (running_send, running_recv) = tokio::sync::watch::channel(false);
+        let (premium_send, premium_recv) = tokio::sync::watch::channel(false);
         let scraper = Self {
             proxies_list: None,
             groups: BTreeMap::new(),
             running: false,
+            running_receiver: running_recv,
+            running_sender: running_send,
             proxies_connected: 0,
             start_time: Instant::now(),
-            // premium_groups: false,
+            premium_groups: false,
+            premium_groups_receiver: premium_recv,
+            premium_groups_sender: premium_send,
             proxies_scroll_state: Default::default(),
             new_proxies_button_state: Default::default(),
             groups_list_state: Default::default(),
@@ -102,21 +112,36 @@ impl Application for GroupScraper {
                 self.groups.insert((name, gid), robux);
                 Command::none()
             }
-            Msg::SetRunning => {
-                self.running = true;
+            Msg::ToggleRunning => {
+                self.running = !self.running;
+                if !self.running {
+                    self.running_sender.broadcast(self.running).unwrap();
+                }
+                let (running_send, running_recv) = tokio::sync::watch::channel(false);
+                self.running_sender = running_send;
+                self.running_receiver = running_recv;
+                self.running_sender.broadcast(self.running).unwrap();
+                self.proxies_connected = 0;
                 Command::none()
             }
             Msg::ProxyConnected => {
-                self.proxies_connected += 1;
+                // Sometimes messages are processed out of order and ProxyConnected are received after all proxies are disconnected
+                if self.running {
+                    self.proxies_connected += 1;
+                }
                 Command::none()
             }
             Msg::ProxyDisconnected => {
-                self.proxies_connected -= 1;
+                if self.running {
+                    self.proxies_connected -= 1;
+                }
                 Command::none()
-            } // Msg::SetPremiumGroups(b) => {
-              //     self.premium_groups = b;
-              //     Command::none()
-              // }
+            }
+            Msg::SetPremiumGroups(b) => {
+                self.premium_groups = b;
+                self.premium_groups_sender.broadcast(b).unwrap();
+                Command::none()
+            }
         }
     }
     fn view(&mut self) -> Element<'_, Self::Message> {
@@ -181,18 +206,17 @@ impl Application for GroupScraper {
             .height(iced::Length::Fill);
         let start_button = widget::Button::new(
             &mut self.start_button_state,
-            widget::Text::new(if self.running { "Running..." } else { "Start" }),
+            widget::Text::new(if self.running { "Stop" } else { "Start" }),
         )
-        .on_press(Msg::SetRunning);
-        // let premium_checkbox =
-        //     widget::Checkbox::new(self.premium_groups, "Detect premium groups", |checked| {
-        //         Msg::SetPremiumGroups(checked)
-        //     });
+        .on_press(Msg::ToggleRunning);
+        let premium_checkbox =
+            widget::Checkbox::new(self.premium_groups, "Detect premium groups", |checked| {
+                Msg::SetPremiumGroups(checked)
+            });
         let start_row = widget::Row::new()
             .push(start_button)
-            // TODO
-            // .push(widget::Space::new(Length::Units(16), Length::Units(0)))
-            // .push(premium_checkbox)
+            .push(widget::Space::new(Length::Units(16), Length::Units(0)))
+            .push(premium_checkbox)
             .align_items(iced::Align::Center);
         let robux_column = widget::Column::new()
             .push(robux_count)
@@ -207,9 +231,11 @@ impl Application for GroupScraper {
     }
     fn subscription(&self) -> Subscription<Self::Message> {
         match (self.running, &self.proxies_list) {
-            (true, Some(Ok(list))) => {
-                iced::Subscription::from_recipe(crate::scraping::Scraping(list.clone()))
-            }
+            (true, Some(Ok(list))) => iced::Subscription::from_recipe(crate::scraping::Scraping {
+                proxy_list: list.clone(),
+                running: self.running_receiver.clone(),
+                premium_groups: self.premium_groups_receiver.clone(),
+            }),
             _ => iced::Subscription::none(),
         }
     }

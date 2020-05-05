@@ -104,7 +104,19 @@ async fn write_to_robux_file(gid: GroupId, robux: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-pub struct Scraping(pub Vec<String>);
+fn get_from_watch<T: Clone>(recv: &tokio::sync::watch::Receiver<T>) -> T {
+    recv.borrow().clone()
+}
+
+fn disconnecting(proxy_number: usize) {
+    println!("Disconnecting from proxy {}", proxy_number);
+}
+
+pub struct Scraping {
+    pub proxy_list: Vec<String>,
+    pub running: tokio::sync::watch::Receiver<bool>,
+    pub premium_groups: tokio::sync::watch::Receiver<bool>,
+}
 
 impl<H, I> iced_futures::subscription::Recipe<H, I> for Scraping
 where
@@ -113,26 +125,40 @@ where
     type Output = ui::Msg;
 
     fn hash(&self, state: &mut H) {
-        self.0.hash(state);
+        self.proxy_list.hash(state);
+        get_from_watch(&self.premium_groups).hash(state);
     }
 
     fn stream(self: Box<Self>, _input: BoxStream<I>) -> BoxStream<Self::Output> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        for (i, proxy_url) in self.0.into_iter().enumerate() {
+        for (i, proxy_url) in self.proxy_list.into_iter().enumerate() {
             let txc = tx.clone();
+            let running = self.running.clone();
+            let premium_groups = self.premium_groups.clone();
             tokio::spawn(async move {
                 let mut groups_checked = 0;
                 loop {
+                    let r = get_from_watch(&running);
+                    if !r {
+                        disconnecting(i);
+                        break;
+                    }
                     let mut connect_error = false;
+                    let mut break_main = false; // Label breaks do not work in async ¯\_(ツ)_/¯
                     for connection_attempt in 0..5 {
                         let mut proxy_connected = false;
-                        let err = async {
+                        let res = async {
                             let client = reqwest::ClientBuilder::new()
                                 .proxy(reqwest::Proxy::all(&proxy_url)?)
                                 .build()?;
                             // Infinite loop of group scraping
                             loop {
+                                let r = get_from_watch(&running);
+                                if !r {
+                                    break_main = true;
+                                    break;
+                                }
                                 let random_group_id = generate_random_group_id();
                                 let res = client
                                     .get(&funds_check_address(random_group_id))
@@ -172,8 +198,15 @@ where
                                     let not_locked = owner.get("isLocked").is_none();
                                     let public =
                                         owner["publicEntryAllowed"] == json::Value::Bool(true);
+                                    let premium =
+                                        owner["isBuildersClubOnly"] == json::Value::Bool(true);
+                                    let accepting_premium_groups = get_from_watch(&premium_groups);
                                     let no_owner = owner["owner"].is_null();
-                                    if not_locked && public && no_owner {
+                                    if not_locked
+                                        && public
+                                        && no_owner
+                                        && (!premium || accepting_premium_groups)
+                                    {
                                         let group_name =
                                             owner["name"].as_str().map(|s| s.to_string());
                                         println!(
@@ -194,24 +227,32 @@ where
                                 }
                                 groups_checked += 1;
                             }
-                            // Type hint
-                            #[allow(unreachable_code)]
                             Ok::<(), Box<dyn std::error::Error>>(())
                         }
-                        .await
-                        .unwrap_err();
+                        .await;
+                        if break_main {
+                            break;
+                        }
                         if proxy_connected {
                             txc.send(ui::Msg::ProxyDisconnected).ok();
                         }
-                        let hyper_error =
-                            err.source().and_then(|s| s.downcast_ref::<hyper::Error>());
-                        connect_error = hyper_error.map_or(false, |e| e.is_connect());
-                        if !connect_error {
-                            println!(
-                                "Proxy {} error in connection attempt {}: {:?}",
-                                i, connection_attempt, err
-                            );
+                        if let Err(err) = res {
+                            let hyper_error =
+                                err.source().and_then(|s| s.downcast_ref::<hyper::Error>());
+                            connect_error = hyper_error.map_or(false, |e| e.is_connect());
+                            if !connect_error {
+                                println!(
+                                    "Proxy {} error in connection attempt {}: {:?}",
+                                    i, connection_attempt, err
+                                );
+                            }
+                        } else {
+                            break;
                         }
+                    }
+                    if break_main {
+                        disconnecting(i);
+                        break;
                     }
                     if !connect_error {
                         println!("Proxy {} disconnected", i);
