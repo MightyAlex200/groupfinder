@@ -116,6 +116,7 @@ pub struct Scraping {
     pub proxy_list: Vec<String>,
     pub running: tokio::sync::watch::Receiver<bool>,
     pub premium_groups: tokio::sync::watch::Receiver<bool>,
+    pub minimum_robux: tokio::sync::watch::Receiver<u16>,
 }
 
 impl<H, I> iced_futures::subscription::Recipe<H, I> for Scraping
@@ -136,6 +137,7 @@ where
             let txc = tx.clone();
             let running = self.running.clone();
             let premium_groups = self.premium_groups.clone();
+            let minimum_robux = self.minimum_robux.clone();
             tokio::spawn(async move {
                 let mut groups_checked = 0;
                 loop {
@@ -181,7 +183,8 @@ where
                                     Ok(f) => f,
                                     Err(_) => continue,
                                 };
-                                if funds.robux > 0 {
+                                let minimum_robux = get_from_watch(&minimum_robux);
+                                if funds.robux >= minimum_robux as u32 {
                                     let res = client
                                         .get(&owner_check_address(random_group_id))
                                         .send()

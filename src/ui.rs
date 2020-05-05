@@ -47,6 +47,7 @@ pub enum Msg {
     ProxyConnected,
     ProxyDisconnected,
     SetPremiumGroups(bool),
+    UpdateMinimumRobux(String),
 }
 
 pub struct GroupScraper {
@@ -60,11 +61,15 @@ pub struct GroupScraper {
     premium_groups: bool,
     premium_groups_sender: tokio::sync::watch::Sender<bool>,
     premium_groups_receiver: tokio::sync::watch::Receiver<bool>,
+    minimum_robux: Option<u16>,
+    minimum_robux_sender: tokio::sync::watch::Sender<u16>,
+    minimum_robux_receiver: tokio::sync::watch::Receiver<u16>,
     // States
     proxies_scroll_state: widget::scrollable::State,
     new_proxies_button_state: widget::button::State,
     groups_list_state: widget::scrollable::State,
     start_button_state: widget::button::State,
+    minimum_robux_state: widget::text_input::State,
 }
 
 impl Application for GroupScraper {
@@ -74,6 +79,7 @@ impl Application for GroupScraper {
     fn new((): Self::Flags) -> (Self, Command<Self::Message>) {
         let (running_send, running_recv) = tokio::sync::watch::channel(false);
         let (premium_send, premium_recv) = tokio::sync::watch::channel(false);
+        let (minimum_robux_send, minimum_robux_recv) = tokio::sync::watch::channel(1);
         let scraper = Self {
             proxies_list: None,
             groups: BTreeMap::new(),
@@ -85,10 +91,14 @@ impl Application for GroupScraper {
             premium_groups: false,
             premium_groups_receiver: premium_recv,
             premium_groups_sender: premium_send,
+            minimum_robux: None,
+            minimum_robux_sender: minimum_robux_send,
+            minimum_robux_receiver: minimum_robux_recv,
             proxies_scroll_state: Default::default(),
             new_proxies_button_state: Default::default(),
             groups_list_state: Default::default(),
             start_button_state: Default::default(),
+            minimum_robux_state: Default::default(),
         };
         let command = Command::perform(get_proxies_list(), |res| Msg::ProxyListLoaded(res));
         (scraper, command)
@@ -140,6 +150,14 @@ impl Application for GroupScraper {
             Msg::SetPremiumGroups(b) => {
                 self.premium_groups = b;
                 self.premium_groups_sender.broadcast(b).unwrap();
+                Command::none()
+            }
+            Msg::UpdateMinimumRobux(s) => {
+                let new_min: Result<u16, _> = s.parse();
+                self.minimum_robux = new_min.ok();
+                self.minimum_robux_sender
+                    .broadcast(self.minimum_robux.unwrap_or(1))
+                    .unwrap();
                 Command::none()
             }
         }
@@ -213,7 +231,18 @@ impl Application for GroupScraper {
             widget::Checkbox::new(self.premium_groups, "Detect premium groups", |checked| {
                 Msg::SetPremiumGroups(checked)
             });
+        let minimum_textbox = widget::TextInput::new(
+            &mut self.minimum_robux_state,
+            "Minimum robux",
+            &self
+                .minimum_robux
+                .map(|r| r.to_string())
+                .unwrap_or("".to_string()),
+            Msg::UpdateMinimumRobux,
+        );
         let start_row = widget::Row::new()
+            .push(minimum_textbox)
+            .push(widget::Space::new(Length::Units(16), Length::Units(0)))
             .push(start_button)
             .push(widget::Space::new(Length::Units(16), Length::Units(0)))
             .push(premium_checkbox)
@@ -235,6 +264,7 @@ impl Application for GroupScraper {
                 proxy_list: list.clone(),
                 running: self.running_receiver.clone(),
                 premium_groups: self.premium_groups_receiver.clone(),
+                minimum_robux: self.minimum_robux_receiver.clone(),
             }),
             _ => iced::Subscription::none(),
         }
