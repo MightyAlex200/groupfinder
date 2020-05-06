@@ -9,15 +9,31 @@ use std::{
     time::Instant,
 };
 
-const PREMIUM_ROBUX_PER_MONTH: u16 = 2200;
-const PREMIUM_ROBUX_PER_SECOND: f64 = {
-    let seconds_in_minute = 60;
-    let seconds_in_hour = seconds_in_minute * 60;
-    let seconds_in_day = seconds_in_hour * 24;
-    let seconds_in_month = seconds_in_day * 30;
-    PREMIUM_ROBUX_PER_MONTH as f64 / seconds_in_month as f64
-};
 const PROXIES_LOC: &str = "proxies.json";
+const PREMIUM499: Premium = Premium {
+    robux_per_month: 450,
+    price: "$4.99",
+};
+const PREMIUM999: Premium = Premium {
+    robux_per_month: 1000,
+    price: "$9.99",
+};
+const PREMIUM1999: Premium = Premium {
+    robux_per_month: 2200,
+    price: "$19.99",
+};
+
+struct Premium {
+    robux_per_month: u16,
+    price: &'static str,
+}
+
+impl Premium {
+    fn robux_per_second(&self) -> f64 {
+        const SECONDS_IN_MONTH: f64 = 60. * 60. * 24. * 30.;
+        self.robux_per_month as f64 / SECONDS_IN_MONTH
+    }
+}
 
 pub async fn get_proxies_list() -> Result<Vec<String>, std::io::ErrorKind> {
     let bytes = tokio::fs::read(PROXIES_LOC).await.map_err(|e| e.kind())?;
@@ -274,13 +290,20 @@ impl Application for GroupScraper {
             .map(|GroupInfo { robux, .. }| robux)
             .sum();
         let time_elapsed = self.start_time.elapsed().as_secs_f32();
-        let robux_per_second = robux_found as f32 / time_elapsed as f32;
+        let robux_per_second = robux_found as f64 / time_elapsed as f64;
+        let closest_premium = if robux_per_second > PREMIUM1999.robux_per_second() {
+            PREMIUM1999
+        } else if robux_per_second > PREMIUM999.robux_per_second() {
+            PREMIUM999
+        } else {
+            PREMIUM499
+        };
+        let best_metric =
+            (((robux_per_second / closest_premium.robux_per_second()) - 1.) * 100.) as i16;
         let groups_checked = self.groups_checked.load(Ordering::Relaxed);
         let robux_count = widget::Text::new(format!(
-            "Total robux found: {}\n{} groups checked\n{}% better than premium",
-            robux_found,
-            groups_checked,
-            ((robux_per_second / PREMIUM_ROBUX_PER_SECOND as f32) - 1. * 100.) as i16
+            "Total robux found: {}\n{} groups checked\n{}% better than {} premium",
+            robux_found, groups_checked, best_metric, closest_premium.price,
         ))
         .horizontal_alignment(iced::HorizontalAlignment::Center);
         let mut groups_list =
