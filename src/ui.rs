@@ -1,7 +1,7 @@
 use crate::GroupId;
 use iced::{widget, Application, Command, Element, Length, Subscription};
 use serde_json as json;
-use std::{collections::BTreeMap, time::Instant};
+use std::time::Instant;
 
 const PREMIUM_ROBUX_PER_MONTH: u16 = 2200;
 const PREMIUM_ROBUX_PER_SECOND: f64 = {
@@ -48,11 +48,50 @@ pub enum Msg {
     ProxyDisconnected,
     SetPremiumGroups(bool),
     UpdateMinimumRobux(String),
+    OpenGroup(GroupId),
+}
+
+pub struct GroupInfo {
+    name: Option<String>,
+    id: GroupId,
+    robux: u32,
+    state: widget::button::State,
+}
+
+impl GroupInfo {
+    fn view(&mut self) -> Element<Msg> {
+        widget::Button::new(
+            &mut self.state,
+            widget::Text::new(format!(
+                "Group \"{}\": {} robux",
+                self.name
+                    .as_ref()
+                    .map(|s| &s[..])
+                    .unwrap_or("(unknown group name)"),
+                self.robux
+            )),
+        )
+        .style(GroupButtonStyle)
+        .on_press(Msg::OpenGroup(self.id))
+        .into()
+    }
+}
+
+struct GroupButtonStyle;
+
+impl widget::button::StyleSheet for GroupButtonStyle {
+    fn active(&self) -> widget::button::Style {
+        widget::button::Style {
+            background: None,
+            border_radius: 1,
+            ..Default::default()
+        }
+    }
 }
 
 pub struct GroupScraper {
     proxies_list: Option<Result<Vec<String>, std::io::ErrorKind>>,
-    groups: BTreeMap<(Option<String>, GroupId), u32>,
+    groups: Vec<GroupInfo>,
     running: bool,
     running_sender: tokio::sync::watch::Sender<bool>,
     running_receiver: tokio::sync::watch::Receiver<bool>,
@@ -82,7 +121,7 @@ impl Application for GroupScraper {
         let (minimum_robux_send, minimum_robux_recv) = tokio::sync::watch::channel(1);
         let scraper = Self {
             proxies_list: None,
-            groups: BTreeMap::new(),
+            groups: Vec::new(),
             running: false,
             running_receiver: running_recv,
             running_sender: running_send,
@@ -116,10 +155,17 @@ impl Application for GroupScraper {
                 Msg::ProxyListLoaded(proxies.map_err(|_| std::io::ErrorKind::Other))
             }),
             Msg::GroupFound {
-                group: (name, gid),
+                group: (name, id),
                 robux,
             } => {
-                self.groups.insert((name, gid), robux);
+                self.groups.push(GroupInfo {
+                    name,
+                    id,
+                    robux,
+                    state: Default::default(),
+                });
+                self.groups.sort_by_key(|gi| gi.robux);
+                self.groups.reverse();
                 Command::none()
             }
             Msg::ToggleRunning => {
@@ -160,6 +206,12 @@ impl Application for GroupScraper {
                     .unwrap();
                 Command::none()
             }
+            Msg::OpenGroup(gid) => {
+                if let Err(err) = opener::open(&format!("https://roblox.com/groups/{}", gid)) {
+                    println!("Could not open link: {}", err);
+                }
+                Command::none()
+            }
         }
     }
     fn view(&mut self) -> Element<'_, Self::Message> {
@@ -195,7 +247,11 @@ impl Application for GroupScraper {
             .push(new_proxies_button)
             .align_items(iced::Align::Center);
 
-        let robux_found: u32 = self.groups.iter().map(|(_, r)| r).sum();
+        let robux_found: u32 = self
+            .groups
+            .iter()
+            .map(|GroupInfo { robux, .. }| robux)
+            .sum();
         let time_elapsed = self.start_time.elapsed().as_secs_f32();
         let robux_per_second = robux_found as f32 / time_elapsed as f32;
         let robux_count = widget::Text::new(format!(
@@ -204,24 +260,11 @@ impl Application for GroupScraper {
             ((robux_per_second / PREMIUM_ROBUX_PER_SECOND as f32) - 1. * 100.) as i16
         ))
         .horizontal_alignment(iced::HorizontalAlignment::Center);
-        let mut groups_list = self.groups.iter().collect::<Vec<_>>();
-        groups_list.sort_by_key(|(_, &r)| r);
-        groups_list.reverse();
-        let groups_list = groups_list
-            .into_iter()
-            .fold(
-                widget::Scrollable::new(&mut self.groups_list_state),
-                |list, ((name, _), r)| {
-                    list.push(widget::Text::new(format!(
-                        "Group \"{}\": {} robux",
-                        name.as_ref()
-                            .map(|s| &s[..])
-                            .unwrap_or("(unknown group name)"),
-                        r
-                    )))
-                },
-            )
-            .height(iced::Length::Fill);
+        let mut groups_list =
+            widget::Scrollable::new(&mut self.groups_list_state).height(iced::Length::Fill);
+        for gi in self.groups.iter_mut() {
+            groups_list = groups_list.push(gi.view());
+        }
         let start_button = widget::Button::new(
             &mut self.start_button_state,
             widget::Text::new(if self.running { "Stop" } else { "Start" }),
