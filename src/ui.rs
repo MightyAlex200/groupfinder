@@ -56,6 +56,7 @@ pub struct GroupInfo {
     id: GroupId,
     robux: u32,
     state: widget::button::State,
+    visited: bool,
 }
 
 impl GroupInfo {
@@ -71,19 +72,24 @@ impl GroupInfo {
                 self.robux
             )),
         )
-        .style(GroupButtonStyle)
+        .style(GroupButtonStyle(self.visited))
         .on_press(Msg::OpenGroup(self.id))
         .into()
     }
 }
 
-struct GroupButtonStyle;
+struct GroupButtonStyle(bool);
 
 impl widget::button::StyleSheet for GroupButtonStyle {
     fn active(&self) -> widget::button::Style {
         widget::button::Style {
             background: None,
             border_radius: 1,
+            text_color: if self.0 {
+                iced::Color::from_rgb8(108, 19, 162)
+            } else {
+                iced::Color::from_rgb8(0, 39, 142)
+            },
             ..Default::default()
         }
     }
@@ -163,6 +169,7 @@ impl Application for GroupScraper {
                     id,
                     robux,
                     state: Default::default(),
+                    visited: false,
                 });
                 self.groups.sort_by_key(|gi| gi.robux);
                 self.groups.reverse();
@@ -209,6 +216,10 @@ impl Application for GroupScraper {
             Msg::OpenGroup(gid) => {
                 if let Err(err) = opener::open(&format!("https://roblox.com/groups/{}", gid)) {
                     println!("Could not open link: {}", err);
+                } else {
+                    if let Some(gi) = self.groups.iter_mut().find(|gi| gi.id == gid) {
+                        gi.visited = true;
+                    }
                 }
                 Command::none()
             }
