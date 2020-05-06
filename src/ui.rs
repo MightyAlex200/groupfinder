@@ -164,15 +164,17 @@ impl Application for GroupScraper {
                 group: (name, id),
                 robux,
             } => {
-                self.groups.push(GroupInfo {
-                    name,
-                    id,
-                    robux,
-                    state: Default::default(),
-                    visited: false,
-                });
-                self.groups.sort_by_key(|gi| gi.robux);
-                self.groups.reverse();
+                if !self.groups.iter().any(|gi| gi.id == id) {
+                    self.groups.push(GroupInfo {
+                        name,
+                        id,
+                        robux,
+                        state: Default::default(),
+                        visited: false,
+                    });
+                    self.groups.sort_by_key(|gi| gi.robux);
+                    self.groups.reverse();
+                }
                 Command::none()
             }
             Msg::ToggleRunning => {
