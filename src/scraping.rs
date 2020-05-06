@@ -7,6 +7,10 @@ use serde_json as json;
 use std::{
     collections::BTreeMap,
     hash::{Hash, Hasher},
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tokio::prelude::*;
@@ -117,6 +121,7 @@ pub struct Scraping {
     pub running: tokio::sync::watch::Receiver<bool>,
     pub premium_groups: tokio::sync::watch::Receiver<bool>,
     pub minimum_robux: tokio::sync::watch::Receiver<u16>,
+    pub groups_checked: Arc<AtomicU32>,
 }
 
 impl<H, I> iced_futures::subscription::Recipe<H, I> for Scraping
@@ -138,6 +143,7 @@ where
             let running = self.running.clone();
             let premium_groups = self.premium_groups.clone();
             let minimum_robux = self.minimum_robux.clone();
+            let groups_checked_atomic = self.groups_checked.clone();
             tokio::spawn(async move {
                 let mut groups_checked = 0;
                 loop {
@@ -229,6 +235,7 @@ where
                                     }
                                 }
                                 groups_checked += 1;
+                                groups_checked_atomic.fetch_add(1, Ordering::Relaxed);
                             }
                             Ok::<(), Box<dyn std::error::Error>>(())
                         }
