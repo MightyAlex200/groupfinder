@@ -1,13 +1,7 @@
 use crate::GroupId;
 use iced::{widget, Application, Command, Element, Length, Subscription};
 use serde_json as json;
-use std::{
-    sync::{
-        atomic::{AtomicU32, Ordering},
-        Arc,
-    },
-    time::Instant,
-};
+use std::time::Instant;
 
 const PROXIES_LOC: &str = "proxies.json";
 const PREMIUM499: Premium = Premium {
@@ -71,6 +65,7 @@ pub enum Msg {
     SetPremiumGroups(bool),
     UpdateMinimumRobux(String),
     OpenGroup(GroupId),
+    GroupChecked,
 }
 
 pub struct GroupInfo {
@@ -131,7 +126,7 @@ pub struct GroupScraper {
     minimum_robux: Option<u16>,
     minimum_robux_sender: tokio::sync::watch::Sender<u16>,
     minimum_robux_receiver: tokio::sync::watch::Receiver<u16>,
-    groups_checked: Arc<AtomicU32>,
+    groups_checked: u32,
     // States
     proxies_scroll_state: widget::scrollable::State,
     new_proxies_button_state: widget::button::State,
@@ -162,7 +157,7 @@ impl Application for GroupScraper {
             minimum_robux: None,
             minimum_robux_sender: minimum_robux_send,
             minimum_robux_receiver: minimum_robux_recv,
-            groups_checked: Arc::new(AtomicU32::new(0)),
+            groups_checked: 0,
             proxies_scroll_state: Default::default(),
             new_proxies_button_state: Default::default(),
             groups_list_state: Default::default(),
@@ -249,6 +244,10 @@ impl Application for GroupScraper {
                 }
                 Command::none()
             }
+            Msg::GroupChecked => {
+                self.groups_checked += 1;
+                Command::none()
+            }
         }
     }
     fn view(&mut self) -> Element<'_, Self::Message> {
@@ -300,7 +299,7 @@ impl Application for GroupScraper {
         };
         let best_metric =
             (((robux_per_second / closest_premium.robux_per_second()) - 1.) * 100.) as i16;
-        let groups_checked = self.groups_checked.load(Ordering::Relaxed);
+        let groups_checked = self.groups_checked;
         let robux_count = widget::Text::new(format!(
             "Total robux found: {}\n{} groups checked\n{}% better than {} premium",
             robux_found, groups_checked, best_metric, closest_premium.price,
@@ -354,7 +353,6 @@ impl Application for GroupScraper {
                 running: self.running_receiver.clone(),
                 premium_groups: self.premium_groups_receiver.clone(),
                 minimum_robux: self.minimum_robux_receiver.clone(),
-                groups_checked: self.groups_checked.clone(),
             }),
             _ => iced::Subscription::none(),
         }
