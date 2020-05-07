@@ -237,10 +237,8 @@ impl Application for GroupScraper {
             Msg::OpenGroup(gid) => {
                 if let Err(err) = opener::open(&format!("https://roblox.com/groups/{}", gid)) {
                     println!("Could not open link: {}", err);
-                } else {
-                    if let Some(gi) = self.groups.iter_mut().find(|gi| gi.id == gid) {
-                        gi.visited = true;
-                    }
+                } else if let Some(gi) = self.groups.iter_mut().find(|gi| gi.id == gid) {
+                    gi.visited = true;
                 }
                 Command::none()
             }
@@ -258,7 +256,7 @@ impl Application for GroupScraper {
             }
             Some(Ok(proxies)) => {
                 let mut proxy_list = widget::Scrollable::new(&mut self.proxies_scroll_state);
-                for (i, p) in proxies.into_iter().enumerate() {
+                for (i, p) in proxies.iter().enumerate() {
                     let text_color = if self.proxies_connected.contains(&i) {
                         iced::Color::from_rgb8(32, 219, 82)
                     } else {
@@ -334,7 +332,7 @@ impl Application for GroupScraper {
             &self
                 .minimum_robux
                 .map(|r| r.to_string())
-                .unwrap_or("".to_string()),
+                .unwrap_or_else(|| "".to_string()),
             Msg::UpdateMinimumRobux,
         );
         let start_row = widget::Row::new()
