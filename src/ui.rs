@@ -1,7 +1,7 @@
 use crate::GroupId;
 use iced::{widget, Application, Command, Element, Length, Subscription};
 use serde_json as json;
-use std::time::Instant;
+use std::{collections::BTreeSet, time::Instant};
 
 const PROXIES_LOC: &str = "proxies.json";
 const PREMIUM499: Premium = Premium {
@@ -60,8 +60,8 @@ pub enum Msg {
         robux: u32,
     },
     ToggleRunning,
-    ProxyConnected,
-    ProxyDisconnected,
+    ProxyConnected(usize),
+    ProxyDisconnected(usize),
     SetPremiumGroups(bool),
     UpdateMinimumRobux(String),
     OpenGroup(GroupId),
@@ -118,7 +118,7 @@ pub struct GroupScraper {
     running: bool,
     running_sender: tokio::sync::watch::Sender<bool>,
     running_receiver: tokio::sync::watch::Receiver<bool>,
-    proxies_connected: u32,
+    proxies_connected: BTreeSet<usize>,
     start_time: Instant,
     premium_groups: bool,
     premium_groups_sender: tokio::sync::watch::Sender<bool>,
@@ -149,7 +149,7 @@ impl Application for GroupScraper {
             running: false,
             running_receiver: running_recv,
             running_sender: running_send,
-            proxies_connected: 0,
+            proxies_connected: BTreeSet::new(),
             start_time: Instant::now(),
             premium_groups: false,
             premium_groups_receiver: premium_recv,
@@ -164,7 +164,7 @@ impl Application for GroupScraper {
             start_button_state: Default::default(),
             minimum_robux_state: Default::default(),
         };
-        let command = Command::perform(get_proxies_list(), |res| Msg::ProxyListLoaded(res));
+        let command = Command::perform(get_proxies_list(), Msg::ProxyListLoaded);
         (scraper, command)
     }
     fn title(&self) -> String {
@@ -205,19 +205,19 @@ impl Application for GroupScraper {
                 self.running_sender = running_send;
                 self.running_receiver = running_recv;
                 self.running_sender.broadcast(self.running).unwrap();
-                self.proxies_connected = 0;
+                self.proxies_connected.clear();
                 Command::none()
             }
-            Msg::ProxyConnected => {
+            Msg::ProxyConnected(index) => {
                 // Sometimes messages are processed out of order and ProxyConnected are received after all proxies are disconnected
                 if self.running {
-                    self.proxies_connected += 1;
+                    self.proxies_connected.insert(index);
                 }
                 Command::none()
             }
-            Msg::ProxyDisconnected => {
+            Msg::ProxyDisconnected(index) => {
                 if self.running {
-                    self.proxies_connected -= 1;
+                    self.proxies_connected.remove(&index);
                 }
                 Command::none()
             }
@@ -257,14 +257,20 @@ impl Application for GroupScraper {
                 widget::Text::new(format!("Loading proxies.json failed: {:?}", error)).into()
             }
             Some(Ok(proxies)) => {
-                let proxy_list = proxies.into_iter().fold(
-                    widget::Scrollable::new(&mut self.proxies_scroll_state),
-                    |s, p| s.push(widget::Text::new(p)),
-                );
+                let mut proxy_list = widget::Scrollable::new(&mut self.proxies_scroll_state);
+                for (i, p) in proxies.into_iter().enumerate() {
+                    let text_color = if self.proxies_connected.contains(&i) {
+                        iced::Color::from_rgb8(32, 219, 82)
+                    } else {
+                        iced::Color::from_rgb8(206, 10, 10)
+                    };
+                    proxy_list = proxy_list.push(widget::Text::new(p).color(text_color));
+                }
+                let proxies_connected = self.proxies_connected.len();
                 let proxy_connections = widget::Text::new(format!(
                     "{} proxies connected ({}%)",
-                    self.proxies_connected,
-                    ((self.proxies_connected as f32 / proxies.len() as f32) * 100.0) as u8
+                    proxies_connected,
+                    ((proxies_connected as f32 / proxies.len() as f32) * 100.0) as u8
                 ));
                 widget::Column::new()
                     .push(proxy_connections)
@@ -273,11 +279,14 @@ impl Application for GroupScraper {
                     .into()
             }
         };
-        let new_proxies_button = widget::Button::new(
+        let mut new_proxies_button = widget::Button::new(
             &mut self.new_proxies_button_state,
             widget::Text::new("Generate new proxies list"),
-        )
-        .on_press(Msg::GenerateProxies);
+        );
+        if !self.running {
+            new_proxies_button = new_proxies_button.on_press(Msg::GenerateProxies);
+        }
+        let new_proxies_button = new_proxies_button;
         let proxies_column = widget::Column::new()
             .push(proxies_widget)
             .push(new_proxies_button)

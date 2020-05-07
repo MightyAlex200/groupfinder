@@ -168,7 +168,7 @@ where
                                     .await?;
                                 if !proxy_connected {
                                     proxy_connected = true;
-                                    txc.send(ui::Msg::ProxyConnected).ok();
+                                    txc.send(ui::Msg::ProxyConnected(i)).ok();
                                 }
                                 let funds_value: json::Value =
                                     match json::from_str(&res.text().await?) {
@@ -238,7 +238,7 @@ where
                             break;
                         }
                         if proxy_connected {
-                            txc.send(ui::Msg::ProxyDisconnected).ok();
+                            txc.send(ui::Msg::ProxyDisconnected(i)).ok();
                         }
                         if let Err(err) = res {
                             let hyper_error =
