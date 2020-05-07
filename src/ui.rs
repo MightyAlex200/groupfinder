@@ -305,7 +305,7 @@ impl Application for GroupScraper {
             PREMIUM499
         };
         let best_metric =
-            (((robux_per_second / closest_premium.robux_per_second()) - 1.) * 100.) as i16;
+            (((robux_per_second / closest_premium.robux_per_second()) - 1.) * 100.) as i32;
         let robux_count = widget::Text::new(format!(
             "Total robux found: {}\n{} groups checked\n{}% better than {} premium",
             robux_found, self.groups_checked, best_metric, closest_premium.price,
