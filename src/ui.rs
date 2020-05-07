@@ -299,10 +299,9 @@ impl Application for GroupScraper {
         };
         let best_metric =
             (((robux_per_second / closest_premium.robux_per_second()) - 1.) * 100.) as i16;
-        let groups_checked = self.groups_checked;
         let robux_count = widget::Text::new(format!(
             "Total robux found: {}\n{} groups checked\n{}% better than {} premium",
-            robux_found, groups_checked, best_metric, closest_premium.price,
+            robux_found, self.groups_checked, best_metric, closest_premium.price,
         ))
         .horizontal_alignment(iced::HorizontalAlignment::Center);
         let mut groups_list =
@@ -315,10 +314,11 @@ impl Application for GroupScraper {
             widget::Text::new(if self.running { "Stop" } else { "Start" }),
         )
         .on_press(Msg::ToggleRunning);
-        let premium_checkbox =
-            widget::Checkbox::new(self.premium_groups, "Detect premium groups", |checked| {
-                Msg::SetPremiumGroups(checked)
-            });
+        let premium_checkbox = widget::Checkbox::new(
+            self.premium_groups,
+            "Detect premium groups",
+            Msg::SetPremiumGroups,
+        );
         let minimum_textbox = widget::TextInput::new(
             &mut self.minimum_robux_state,
             "Minimum robux",
