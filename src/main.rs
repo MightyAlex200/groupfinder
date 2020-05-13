@@ -11,7 +11,7 @@ pub type GroupId = u32;
 fn main() {
     let settings = iced::Settings {
         window: iced::window::Settings {
-            resizable: false,
+            size: (1000, 600),
             ..Default::default()
         },
         ..Default::default()

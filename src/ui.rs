@@ -1,5 +1,8 @@
 use crate::GroupId;
-use iced::{widget, Application, Command, Element, Length, Subscription};
+use iced::{
+    widget, Application, Color, Command, Element, HorizontalAlignment, Length, Subscription,
+    VerticalAlignment,
+};
 use serde_json as json;
 use std::{collections::BTreeSet, time::Instant};
 
@@ -95,6 +98,10 @@ impl GroupInfo {
     }
 }
 
+fn header(label: impl Into<String>) -> widget::Text {
+    widget::Text::new(label).size(28)
+}
+
 struct GroupButtonStyle(bool);
 
 impl widget::button::StyleSheet for GroupButtonStyle {
@@ -103,10 +110,21 @@ impl widget::button::StyleSheet for GroupButtonStyle {
             background: None,
             border_radius: 1,
             text_color: if self.0 {
-                iced::Color::from_rgb8(108, 19, 162)
+                Color::from_rgb8(108, 19, 162)
             } else {
-                iced::Color::from_rgb8(0, 39, 142)
+                Color::from_rgb8(0, 39, 142)
             },
+            ..Default::default()
+        }
+    }
+}
+
+struct ListStyle;
+
+impl widget::container::StyleSheet for ListStyle {
+    fn style(&self) -> widget::container::Style {
+        widget::container::Style {
+            background: Some(iced::Background::Color(Color::from_rgb8(238, 238, 238))),
             ..Default::default()
         }
     }
@@ -249,21 +267,36 @@ impl Application for GroupScraper {
         }
     }
     fn view(&mut self) -> Element<'_, Self::Message> {
+        let proxies_header = header("Proxies");
         let proxies_widget: Element<_> = match &self.proxies_list {
             None => widget::Text::new("Loading proxies").into(),
+            Some(Err(std::io::ErrorKind::NotFound)) => widget::Text::new(
+                "Thank you for using my program.\n
+To scrape groups, you must first create a list of proxies to scrape with.\n
+Click the button below to automatically generate one.\n
+You will also need an api.key file in the same directory as this program.",
+            )
+            .size(16)
+            .vertical_alignment(VerticalAlignment::Center)
+            .height(Length::Fill)
+            .into(),
             Some(Err(error)) => {
                 widget::Text::new(format!("Loading proxies.json failed: {:?}", error)).into()
             }
             Some(Ok(proxies)) => {
-                let mut proxy_list = widget::Scrollable::new(&mut self.proxies_scroll_state);
+                let mut proxy_list =
+                    widget::Scrollable::new(&mut self.proxies_scroll_state).width(Length::Fill);
                 for (i, p) in proxies.iter().enumerate() {
                     let text_color = if self.proxies_connected.contains(&i) {
-                        iced::Color::from_rgb8(32, 219, 82)
+                        Color::from_rgb8(32, 219, 82)
                     } else {
-                        iced::Color::from_rgb8(206, 10, 10)
+                        Color::from_rgb8(206, 10, 10)
                     };
                     proxy_list = proxy_list.push(widget::Text::new(p).color(text_color));
                 }
+                let proxy_list_container = widget::Container::new(proxy_list)
+                    .padding(4)
+                    .style(ListStyle);
                 let proxies_connected = self.proxies_connected.len();
                 let proxy_connections = widget::Text::new(format!(
                     "{} proxies connected ({}%)",
@@ -272,7 +305,8 @@ impl Application for GroupScraper {
                 ));
                 widget::Column::new()
                     .push(proxy_connections)
-                    .push(proxy_list)
+                    .push(proxy_list_container)
+                    .padding(4)
                     .height(iced::Length::Fill)
                     .into()
             }
@@ -286,9 +320,10 @@ impl Application for GroupScraper {
         }
         let new_proxies_button = new_proxies_button;
         let proxies_column = widget::Column::new()
+            .push(proxies_header)
             .push(proxies_widget)
             .push(new_proxies_button)
-            .align_items(iced::Align::Center);
+            .width(Length::FillPortion(4));
 
         let robux_found: u32 = self
             .groups
@@ -310,17 +345,30 @@ impl Application for GroupScraper {
             "Total robux found: {}\n{} groups checked\n{}% better than {} premium",
             robux_found, self.groups_checked, best_metric, closest_premium.price,
         ))
-        .horizontal_alignment(iced::HorizontalAlignment::Center);
+        .horizontal_alignment(HorizontalAlignment::Center);
         let mut groups_list =
-            widget::Scrollable::new(&mut self.groups_list_state).height(iced::Length::Fill);
+            widget::Scrollable::new(&mut self.groups_list_state).height(Length::Fill);
+        let groups_found = self.groups.len();
         for gi in self.groups.iter_mut() {
             groups_list = groups_list.push(gi.view());
         }
         let start_button = widget::Button::new(
             &mut self.start_button_state,
-            widget::Text::new(if self.running { "Stop" } else { "Start" }),
+            widget::Text::new(if self.running {
+                "Stop"
+            } else {
+                "Start scraping"
+            }),
         )
         .on_press(Msg::ToggleRunning);
+        let groups_header = header(format!("Groups found ({})", groups_found))
+            .width(Length::Fill)
+            .horizontal_alignment(HorizontalAlignment::Left);
+        let groups_list_container = widget::Container::new(groups_list)
+            .padding(4)
+            .height(Length::Fill)
+            .width(Length::Fill)
+            .style(ListStyle);
         let premium_checkbox = widget::Checkbox::new(
             self.premium_groups,
             "Detect premium groups",
@@ -335,22 +383,25 @@ impl Application for GroupScraper {
                 .unwrap_or_else(|| "".to_string()),
             Msg::UpdateMinimumRobux,
         );
-        let start_row = widget::Row::new()
+        let config_row = widget::Row::new()
             .push(minimum_textbox)
-            .push(widget::Space::new(Length::Units(16), Length::Units(0)))
-            .push(start_button)
-            .push(widget::Space::new(Length::Units(16), Length::Units(0)))
             .push(premium_checkbox)
+            .spacing(16)
             .align_items(iced::Align::Center);
         let robux_column = widget::Column::new()
             .push(robux_count)
-            .push(groups_list)
-            .push(start_row)
-            .width(iced::Length::Fill)
+            .push(start_button)
+            .push(groups_header)
+            .push(groups_list_container)
+            .push(config_row)
+            .spacing(4)
+            .width(Length::FillPortion(6))
             .align_items(iced::Align::Center);
         widget::Row::new()
             .push(proxies_column)
             .push(robux_column)
+            .padding(4)
+            .spacing(16)
             .into()
     }
     fn subscription(&self) -> Subscription<Self::Message> {
