@@ -45,6 +45,7 @@ pub async fn generate_proxies_list() -> Result<Vec<String>, ()> {
         .text()
         .await
         .map_err(drop)?
+        .trim()
         .split("\r\n")
         .map(|s| format!("socks5://{}", s))
         .collect();
