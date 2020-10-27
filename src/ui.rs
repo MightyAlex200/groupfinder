@@ -4,7 +4,7 @@ use iced::{
     VerticalAlignment,
 };
 use serde_json as json;
-use std::{collections::BTreeSet, time::Instant};
+use std::{collections::BTreeMap, time::Instant};
 
 const PROXIES_LOC: &str = "proxies.json";
 const PREMIUM499: Premium = Premium {
@@ -55,6 +55,13 @@ pub async fn generate_proxies_list() -> Result<Vec<String>, ()> {
     Ok(list)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Connectedness {
+    Connected,
+    Unconnected,
+    RateLimited,
+}
+
 #[derive(Debug, Clone)]
 pub enum Msg {
     ProxyListLoaded(Result<Vec<String>, std::io::ErrorKind>),
@@ -64,8 +71,7 @@ pub enum Msg {
         robux: u32,
     },
     ToggleRunning,
-    ProxyConnected(usize),
-    ProxyDisconnected(usize),
+    ProxyConnected(usize, Connectedness),
     SetPremiumGroups(bool),
     UpdateMinimumRobux(String),
     OpenGroup(GroupId),
@@ -137,7 +143,7 @@ pub struct GroupScraper {
     running: bool,
     running_sender: tokio::sync::watch::Sender<bool>,
     running_receiver: tokio::sync::watch::Receiver<bool>,
-    proxies_connected: BTreeSet<usize>,
+    proxies_connected: BTreeMap<usize, Connectedness>,
     start_time: Instant,
     premium_groups: bool,
     premium_groups_sender: tokio::sync::watch::Sender<bool>,
@@ -168,7 +174,7 @@ impl Application for GroupScraper {
             running: false,
             running_receiver: running_recv,
             running_sender: running_send,
-            proxies_connected: BTreeSet::new(),
+            proxies_connected: BTreeMap::new(),
             start_time: Instant::now(),
             premium_groups: false,
             premium_groups_receiver: premium_recv,
@@ -227,16 +233,10 @@ impl Application for GroupScraper {
                 self.proxies_connected.clear();
                 Command::none()
             }
-            Msg::ProxyConnected(index) => {
+            Msg::ProxyConnected(index, connectedness) => {
                 // Sometimes messages are processed out of order and ProxyConnected are received after all proxies are disconnected
                 if self.running {
-                    self.proxies_connected.insert(index);
-                }
-                Command::none()
-            }
-            Msg::ProxyDisconnected(index) => {
-                if self.running {
-                    self.proxies_connected.remove(&index);
+                    self.proxies_connected.insert(index, connectedness);
                 }
                 Command::none()
             }
@@ -288,17 +288,21 @@ You will also need an api.key file in the same directory as this program.",
                 let mut proxy_list =
                     widget::Scrollable::new(&mut self.proxies_scroll_state).width(Length::Fill);
                 for (i, p) in proxies.iter().enumerate() {
-                    let text_color = if self.proxies_connected.contains(&i) {
-                        Color::from_rgb8(32, 219, 82)
-                    } else {
-                        Color::from_rgb8(206, 10, 10)
+                    let text_color = match self.proxies_connected.get(&i) {
+                        Some(Connectedness::Connected) => Color::from_rgb8(32, 219, 82),
+                        Some(Connectedness::RateLimited) => Color::from_rgb8(206, 206, 10),
+                        None | Some(Connectedness::Unconnected) => Color::from_rgb8(206, 10, 10),
                     };
                     proxy_list = proxy_list.push(widget::Text::new(p).color(text_color));
                 }
                 let proxy_list_container = widget::Container::new(proxy_list)
                     .padding(4)
                     .style(ListStyle);
-                let proxies_connected = self.proxies_connected.len();
+                let proxies_connected = self
+                    .proxies_connected
+                    .iter()
+                    .filter(|(&_, &v)| v != Connectedness::Unconnected)
+                    .count();
                 let proxy_connections = widget::Text::new(format!(
                     "{} proxies connected ({}%)",
                     proxies_connected,

@@ -10,7 +10,11 @@ use std::{
     time::Duration,
 };
 use tokio::prelude::*;
-use tokio::{sync::Semaphore, time::delay_for};
+use tokio::{
+    sync::{mpsc::UnboundedSender, Semaphore},
+    time::delay_for,
+};
+use ui::Connectedness;
 
 lazy_static! {
     static ref ROBUX_SEMAPHORE: Semaphore = Semaphore::new(1);
@@ -49,12 +53,17 @@ fn is_rate_limited(group_info: &json::Value) -> bool {
     }
 }
 
-async fn rate_limited(proxy_index: usize) {
+async fn rate_limited(proxy_index: usize, txc: &UnboundedSender<ui::Msg>) {
     println!(
         "Proxy {} is rate limited, waiting {} seconds",
         proxy_index,
         COOLDOWN_TIME.as_secs()
     );
+    txc.send(ui::Msg::ProxyConnected(
+        proxy_index,
+        Connectedness::RateLimited,
+    ))
+    .ok();
     delay_for(COOLDOWN_TIME).await;
 }
 
@@ -168,7 +177,8 @@ where
                                     .await?;
                                 if !proxy_connected {
                                     proxy_connected = true;
-                                    txc.send(ui::Msg::ProxyConnected(i)).ok();
+                                    txc.send(ui::Msg::ProxyConnected(i, Connectedness::Connected))
+                                        .ok();
                                 }
                                 let funds_value: json::Value =
                                     match json::from_str(&res.text().await?) {
@@ -176,7 +186,7 @@ where
                                         Err(_) => continue,
                                     };
                                 if is_rate_limited(&funds_value) {
-                                    rate_limited(i).await;
+                                    rate_limited(i, &txc).await;
                                     continue;
                                 }
                                 let funds: FundsResponse = match json::from_value(funds_value) {
@@ -195,7 +205,7 @@ where
                                             Err(_) => continue,
                                         };
                                     if is_rate_limited(&owner) {
-                                        rate_limited(i).await;
+                                        rate_limited(i, &txc).await;
                                         continue;
                                     }
                                     let not_locked = owner.get("isLocked").is_none();
@@ -238,7 +248,8 @@ where
                             break;
                         }
                         if proxy_connected {
-                            txc.send(ui::Msg::ProxyDisconnected(i)).ok();
+                            txc.send(ui::Msg::ProxyConnected(i, Connectedness::Unconnected))
+                                .ok();
                         }
                         if let Err(err) = res {
                             let hyper_error =
