@@ -23,6 +23,7 @@ lazy_static! {
 }
 
 const COOLDOWN_TIME: Duration = Duration::from_secs(60);
+const DEFAULT_WAIT_TIME: Duration = Duration::from_secs(10);
 const ROBUX_FILE: &str = "robux.txt";
 const API_KEY_FILE: &str = "api.key";
 const RECONNECT_THRESHOLD: i32 = 5;
@@ -240,6 +241,7 @@ where
                                 }
                                 groups_checked += 1;
                                 txc.send(ui::Msg::GroupChecked).ok();
+                                delay_for(DEFAULT_WAIT_TIME).await;
                             }
                             Ok::<(), Box<dyn std::error::Error>>(())
                         }
